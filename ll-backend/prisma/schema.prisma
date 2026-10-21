@@ -1,0 +1,1155 @@
+// Little Legacy — PostgreSQL schema.
+// Requirements: docs/PRODUCT_SPEC.md (client guide) and docs/prototype/*.
+// Conventions: cuid ids, camelCase fields mapped to snake_case tables, money as Decimal(12,2)
+// in the country's own currency (never converted), soft-withdraw for learning content so
+// child history and earned scores are never rewritten.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum AdminRole {
+  SUPER_ADMIN
+  SUB_ADMIN
+}
+
+enum PlanTier {
+  FREE
+  PLUS
+  PREMIUM
+}
+
+enum ContentStatus {
+  DRAFT
+  PENDING_APPROVAL
+  PUBLISHED
+  REJECTED
+  WITHDRAWN
+}
+
+enum DraftStatus {
+  PENDING
+  PUBLISHED
+  REJECTED
+}
+
+enum QuestionDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum SkillStage {
+  STARTING
+  PRACTISING
+  CONFIDENT
+}
+
+enum CompletionOutcome {
+  INDEPENDENT
+  WITH_HELP
+  NOT_COMPLETED
+}
+
+enum AssignmentStatus {
+  ASSIGNED
+  COMPLETED
+  PENDING
+  ARCHIVED
+}
+
+enum LibraryKind {
+  STORY
+  RHYME
+}
+
+enum CommunityAuthorType {
+  PARENT
+  TEAM
+}
+
+enum CommunityPostStatus {
+  AWAITING_MODERATION
+  DRAFT
+  PUBLISHED
+  REJECTED
+}
+
+enum EnquiryStatus {
+  NEW
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum NotificationChannel {
+  EMAIL
+  IN_APP
+}
+
+enum OrderStatus {
+  PAID
+  PACKED
+  DISPATCHED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum RestrictionType {
+  ACTIVITIES_SECTION
+  ACTIVITY
+  LEVEL
+  STORIES
+  RHYMES
+  COMMUNITY
+  ECOMMERCE
+}
+
+enum UploadKind {
+  IMAGE
+  AUDIO
+  VIDEO
+  DOCUMENT
+}
+
+enum AppContentSurface {
+  TERMS
+  PRIVACY
+  HELP
+  PAGE_FAQ
+}
+
+// ───────────────────────── Staff, audit, drafts ─────────────────────────
+
+model AdminUser {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  passwordHash  String
+  role          AdminRole @default(SUB_ADMIN)
+  /// PermissionSection keys (src/common/rules/domain.ts). Ignored for SUPER_ADMIN.
+  permissions   String[]
+  /// "Allow direct publishing". Off → every change becomes a DraftApproval.
+  directPublish Boolean   @default(false)
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  auditLogs      AuditLog[]
+  drafts         DraftApproval[] @relation("DraftAuthor")
+  reviewedDrafts DraftApproval[] @relation("DraftReviewer")
+  uploads        Upload[]
+
+  @@map("admin_users")
+}
+
+/// Every stored file (covers, story pages, product images, activity previews, music…).
+/// Content tables reference files by `url`; this table is the inventory for auditing and cleanup.
+model Upload {
+  id           String     @id @default(cuid())
+  /// Storage-driver key, e.g. "images/2026/09/ckx….webp". Unique per driver.
+  key          String     @unique
+  /// Public URL served to the admin panel and parent app.
+  url          String
+  kind         UploadKind
+  /// Detected from the file's bytes, not trusted from the browser.
+  mimeType     String
+  sizeBytes    Int
+  originalName String
+  /// Storage driver that holds the bytes ('local' | 's3').
+  driver       String     @default("local")
+  uploadedById String?
+  uploadedBy   AdminUser? @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime   @default(now())
+
+  @@index([kind, createdAt])
+  @@map("uploads")
+}
+
+/// Append-only staff accountability log (guide §23). Never updated or deleted.
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      AdminUser? @relation(fields: [actorId], references: [id])
+  actorName  String
+  actorRole  AdminRole
+  action     String
+  section    String?
+  entityType String?
+  entityId   String?
+  before     Json?
+  after      Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+/// A proposed change awaiting Super Admin review (guide §2). `before` is the published
+/// snapshot when the draft was made; approval is refused if the row has changed since.
+model DraftApproval {
+  id           String      @id @default(cuid())
+  authorId     String
+  author       AdminUser   @relation("DraftAuthor", fields: [authorId], references: [id])
+  section      String
+  entityType   String
+  /// Null when the draft creates a new record.
+  entityId     String?
+  regionId     String?
+  /// Readable one-line summary built at save time ("Reply to Priya", "Cognitive · Level 4").
+  /// Null on drafts saved before 2026-10-13.
+  label        String?
+  before       Json?
+  after        Json
+  status       DraftStatus @default(PENDING)
+  reason       String?
+  reviewedById String?
+  reviewedBy   AdminUser?  @relation("DraftReviewer", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+  createdAt    DateTime    @default(now())
+
+  @@index([status, createdAt])
+  @@map("draft_approvals")
+}
+
+/// Small key/value settings, e.g. community.regularVisibleLimit, checklist.visibleLimit.
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}
+
+// ───────────────────────── Countries & regions ─────────────────────────
+
+/// One country list shared by subscriptions, shop and country access (guide §20).
+model Country {
+  code             String  @id @db.Char(2) // ISO-3166 alpha-2, immutable
+  name             String
+  currency         String  @db.Char(3) // ISO-4217, immutable
+  /// One delivery charge per shop order. Never applied to subscriptions.
+  deliveryCharge   Decimal @default(0) @db.Decimal(12, 2)
+  deliveryEstimate String?
+  enabled          Boolean @default(true)
+  /// A country belongs to at most one learning region; null → default region applies.
+  learningRegionId String?
+  learningRegion   LearningRegion? @relation(fields: [learningRegionId], references: [id])
+
+  restrictions  CountryRestriction[]
+  planPrices    PlanPrice[]
+  productPrices ProductPrice[]
+  parents       Parent[]
+  orders        Order[]
+
+  @@map("countries")
+}
+
+/// "Regional learning category" (guide §5). Each has its own full learning catalogue.
+model LearningRegion {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  /// Used for countries not assigned to any region (Admin Panel Control Pointers §1).
+  isDefault Boolean  @default(false)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  countries           Country[]
+  areas               DevelopmentArea[]
+  ageGroups           AgeGroup[]
+  activities          Activity[]
+  activityFamilies    ActivityFamily[]
+  assessmentConfigs   AssessmentConfig[]
+  mandatoryActivities MandatoryActivity[]
+  progression         ProgressionSettings?
+  bases               DevelopmentBase[]
+  children            Child[]
+  childFieldSettings  ChildFieldSetting[]
+  checklistItems      ChecklistItem[]
+
+  @@map("learning_regions")
+}
+
+/// Any enabled matching rule blocks access; a blocked section cannot be bypassed by an item (guide §21).
+model CountryRestriction {
+  id          String          @id @default(cuid())
+  countryCode String          @db.Char(2)
+  country     Country         @relation(fields: [countryCode], references: [code])
+  type        RestrictionType
+  /// Activity id or Level id for item-level rules; null for whole-section rules.
+  targetId    String?
+  message     String          @default("This content is not available in your country.")
+  enabled     Boolean         @default(false)
+  updatedById String?
+  updatedAt   DateTime        @updatedAt
+
+  @@unique([countryCode, type, targetId])
+  @@map("country_restrictions")
+}
+
+/// Which child fields are collected, per region (Admin Panel Control Pointers §4), e.g. DOB.
+model ChildFieldSetting {
+  id        String         @id @default(cuid())
+  regionId  String
+  region    LearningRegion @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  field     String
+  collected Boolean        @default(true)
+
+  @@unique([regionId, field])
+  @@map("child_field_settings")
+}
+
+// ───────────────────────── Parents & children ─────────────────────────
+
+model Parent {
+  id          String   @id @default(cuid())
+  name        String
+  email       String   @unique
+  countryCode String?  @db.Char(2)
+  country     Country? @relation(fields: [countryCode], references: [code])
+  createdAt   DateTime @default(now())
+
+  children      Child[]
+  communityPosts CommunityPost[]
+  enquiries     Enquiry[]
+  notifications Notification[]
+  orders        Order[]
+  favorites     Favorite[]
+  engagement    LibraryEngagement[]
+
+  @@map("parents")
+}
+
+/// Admins can read but never edit a child's personal details or earned scores (guide §4).
+model Child {
+  id             String    @id @default(cuid())
+  parentId       String
+  parent         Parent    @relation(fields: [parentId], references: [id], onDelete: Cascade)
+  name           String
+  dob            DateTime? @db.Date
+  /// Parents may correct DOB once.
+  dobCorrectedAt DateTime?
+  /// Assigned from the country at creation; a later location change does not replace it.
+  regionId       String
+  region         LearningRegion @relation(fields: [regionId], references: [id])
+  /// Weekly cycle anchor; restarts on a completed-year birthday or DOB correction.
+  cycleStartedAt DateTime?
+  /// Only the first child in a parent account is eligible.
+  trialStartedAt DateTime?
+  createdAt      DateTime  @default(now())
+
+  subscriptions  ChildSubscription[]
+  questionnaires QuestionnaireSubmission[]
+  attempts       ActivityAttempt[]
+  levels         ChildAreaLevel[]
+  familyStages   ChildFamilyStage[]
+  assignments    WeeklyAssignment[]
+  checklistTicks ChecklistTick[]
+  readingHistory ReadingHistory[]
+
+  @@map("children")
+}
+
+/// Subscriptions are per child profile (guide §19).
+model ChildSubscription {
+  id          String    @id @default(cuid())
+  childId     String
+  child       Child     @relation(fields: [childId], references: [id], onDelete: Cascade)
+  plan        PlanTier
+  isTrial     Boolean   @default(false)
+  countryCode String    @db.Char(2)
+  /// Price recorded at purchase — later catalogue changes must not alter it.
+  amountPaid  Decimal   @default(0) @db.Decimal(12, 2)
+  currency    String    @db.Char(3)
+  startsAt    DateTime
+  endsAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([childId, startsAt])
+  @@map("child_subscriptions")
+}
+
+// ───────────────────────── Learning catalogue (per region) ─────────────────────────
+
+model DevelopmentArea {
+  id           String         @id @default(cuid())
+  regionId     String
+  region       LearningRegion @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  name         String
+  description  String?
+  position     Int            @default(0)
+  /// Set when an area with child history is removed: hidden everywhere, its activities withdrawn,
+  /// history and earned scores kept. Areas without child history are deleted outright.
+  removedAt    DateTime?
+
+  categories ActivityCategory[]
+  levels     Level[]
+  questions  Question[]
+  skills     Skill[]
+  activities Activity[]
+  families   ActivityFamily[]
+  mandatory  MandatoryActivity[]
+
+  /// Name is unique per region among areas that aren't removed — enforced in AreasService,
+  /// so a removed area's name can be reused.
+  @@index([regionId])
+  @@map("development_areas")
+}
+
+/// Optional grouping inside an area; each has its own levels and activities.
+model ActivityCategory {
+  id          String          @id @default(cuid())
+  areaId      String
+  area        DevelopmentArea @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  /// Set when a category with child history is removed: hidden with everything in it, its
+  /// activities withdrawn; its levels are kept because children's earned levels come from them.
+  removedAt   DateTime?
+
+  levels     Level[]
+  activities Activity[]
+  families   ActivityFamily[]
+
+  /// Name is unique per area among categories that aren't removed — enforced in CategoriesService.
+  @@index([areaId])
+  @@map("activity_categories")
+}
+
+/// Supported completed-year ages. No upper limit.
+model AgeGroup {
+  id       String         @id @default(cuid())
+  regionId String
+  region   LearningRegion @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  age      Int
+
+  @@unique([regionId, age])
+  @@map("age_groups")
+}
+
+/// Area level with unlock thresholds: BOTH score and mastered count must be met (guide §9).
+model Level {
+  id               String            @id @default(cuid())
+  areaId           String
+  area             DevelopmentArea   @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  categoryId       String?
+  category         ActivityCategory? @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  number           Int
+  title            String?
+  icon             String?
+  iconColor        String?
+  requiredScore    Int               @default(0)
+  requiredMastered Int               @default(0)
+
+  activities Activity[]
+
+  @@unique([areaId, categoryId, number])
+  @@map("levels")
+}
+
+/// Questionnaire MCQ. Difficulty and marks are admin-only — never shown to parents (guide §6).
+model Question {
+  id         String             @id @default(cuid())
+  areaId     String
+  area       DevelopmentArea    @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  /// Null → all supported ages.
+  age        Int?
+  text       String
+  difficulty QuestionDifficulty @default(EASY)
+  position   Int                @default(0)
+  skillId    String?
+  skill      Skill?             @relation(fields: [skillId], references: [id], onDelete: SetNull)
+
+  options QuestionOption[]
+
+  @@map("questions")
+}
+
+model QuestionOption {
+  id         String      @id @default(cuid())
+  questionId String
+  question   Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  label      String
+  marks      Decimal     @db.Decimal(8, 2)
+  position   Int         @default(0)
+  /// Skill evidence this answer implies (guide §10). Null = unknown.
+  skillStage SkillStage?
+
+  @@map("question_options")
+}
+
+model Skill {
+  id     String          @id @default(cuid())
+  areaId String
+  area   DevelopmentArea @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  name   String
+
+  expectations SkillExpectation[]
+  questions    Question[]
+  activities   Activity[]
+  families     ActivityFamily[]
+
+  @@unique([areaId, name])
+  @@map("skills")
+}
+
+/// Expected score for a skill at an age; below it → more recommendations (guide §10).
+model SkillExpectation {
+  skillId       String
+  skill         Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  age           Int
+  expectedScore Int
+
+  @@id([skillId, age])
+  @@map("skill_expectations")
+}
+
+/// "Activity with its own difficulty levels" (Activity Flow §5). Level count is not capped.
+model ActivityFamily {
+  id            String            @id @default(cuid())
+  regionId      String
+  region        LearningRegion    @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  areaId        String
+  area          DevelopmentArea   @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  categoryId    String?
+  category      ActivityCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  age           Int
+  name          String
+  skillId       String?
+  skill         Skill?            @relation(fields: [skillId], references: [id], onDelete: SetNull)
+  /// Expected skill score (%) used to prioritise selection.
+  benchmark     Int               @default(50)
+  mandatory     Boolean           @default(false)
+  /// Development Base positions (1..n) this family is eligible for; empty = all.
+  baseEligibility Int[]
+  archived      Boolean           @default(false)
+
+  activities Activity[]
+  stages     ChildFamilyStage[]
+
+  @@unique([areaId, age, name])
+  @@map("activity_families")
+}
+
+model Activity {
+  id              String            @id @default(cuid())
+  regionId        String
+  region          LearningRegion    @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  areaId          String
+  area            DevelopmentArea   @relation(fields: [areaId], references: [id])
+  categoryId      String?
+  category        ActivityCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  levelId         String?
+  level           Level?            @relation(fields: [levelId], references: [id], onDelete: SetNull)
+  /// Set when this activity is one difficulty of an ActivityFamily.
+  familyId        String?
+  family          ActivityFamily?   @relation(fields: [familyId], references: [id], onDelete: SetNull)
+  difficultyLevel Int?
+  age             Int
+  title           String
+  description     String
+  materials       String?
+  /// Independent-mode target duration — a guide, not an automatic finish.
+  durationMinutes Int
+  minimumPlan     PlanTier          @default(FREE)
+  baseMarks       Int
+  /// Independent completions required for mastery (≥1).
+  masteryTarget   Int
+  skillId         String?
+  skill           Skill?            @relation(fields: [skillId], references: [id], onDelete: SetNull)
+  /// Difficulty within the level, for personalisation.
+  skillStage      SkillStage        @default(STARTING)
+  status          ContentStatus     @default(DRAFT)
+  /// Withdrawn activities stop being offered; history and earned scores remain (guide §13).
+  withdrawnAt     DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  steps       ActivityStep[]
+  previews    ActivityPreview[]
+  attempts    ActivityAttempt[]
+  mandatory   MandatoryActivity[]
+  assignments WeeklyAssignment[]
+
+  @@unique([familyId, difficultyLevel])
+  @@index([regionId, areaId, age])
+  @@map("activities")
+}
+
+/// Guidance steps: optional, untimed, no marks.
+model ActivityStep {
+  id          String   @id @default(cuid())
+  activityId  String
+  activity    Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  position    Int
+  title       String
+  description String
+
+  @@map("activity_steps")
+}
+
+model ActivityPreview {
+  id         String   @id @default(cuid())
+  activityId String
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  position   Int
+  imageUrl   String?
+  caption    String?
+
+  @@map("activity_previews")
+}
+
+/// Immutable snapshot of formulas, area weights, question weights, mandatory sets and required
+/// counts. Saving rules creates a new revision; children keep the revision they started with.
+model AssessmentConfig {
+  id        String         @id @default(cuid())
+  regionId  String
+  region    LearningRegion @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  revision  Int
+  /// { areas: [{ areaId, formula, weight, questionWeights: {EASY,MEDIUM,HARD} }],
+  ///   mandatory: { [age]: { [areaId]: activityId[] } }, requiredCounts: { [age]: { [areaId]: n } } }
+  rules     Json
+  createdById String?
+  createdAt DateTime       @default(now())
+
+  submissions QuestionnaireSubmission[]
+
+  @@unique([regionId, revision])
+  @@map("assessment_configs")
+}
+
+/// Working copy of the mandatory set (snapshotted into AssessmentConfig on save).
+model MandatoryActivity {
+  regionId   String
+  region     LearningRegion  @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  age        Int
+  areaId     String
+  area       DevelopmentArea @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  activityId String
+  activity   Activity        @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  @@id([regionId, age, areaId, activityId])
+  @@map("mandatory_activities")
+}
+
+/// Activity Flow §17 "Activity Progression Settings", one row per region.
+model ProgressionSettings {
+  regionId                 String         @id
+  region                   LearningRegion @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  weeklyLimit              Int            @default(20)
+  /// Guide §11 cap on (last week's completions + 5). See docs/OPEN_QUESTIONS.md Q1.
+  maxVisible               Int?
+  pendingEnabled           Boolean        @default(true)
+  pendingLimit             Int            @default(10)
+  /// 0 = no expiry.
+  pendingExpiryDays        Int            @default(28)
+  pendingCountsTowardLimit Boolean        @default(false)
+  recentCount              Int            @default(5)
+  continueCount            Int            @default(4)
+  /// 'anniversary' (every 7 days from cycle start) or '0'..'6' (UTC weekday).
+  resetDay                 String         @default("anniversary")
+  /// After "could not complete": offer the 'same' level again, or one step 'easier'.
+  reinforcement            String         @default("same")
+  /// [{ age|null, basePosition|null, areaId|null, plan|null, limit, startDifficulty }]
+  overrides                Json           @default("[]")
+  updatedAt                DateTime       @updatedAt
+
+  @@map("progression_settings")
+}
+
+/// Base 1 / 2 / 3 (Activity Flow §1, §10): assessment-% band → starting difficulty.
+model DevelopmentBase {
+  id              String         @id @default(cuid())
+  regionId        String
+  region          LearningRegion @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  position        Int
+  name            String
+  fromPercent     Int
+  startDifficulty Int
+
+  @@unique([regionId, position])
+  @@map("development_bases")
+}
+
+// ───────────────────────── Child learning records (read-only to admin) ─────────────────────────
+
+/// Re-evaluation replaces the current questionnaire score; it is never added (guide §7).
+model QuestionnaireSubmission {
+  id          String           @id @default(cuid())
+  childId     String
+  child       Child            @relation(fields: [childId], references: [id], onDelete: Cascade)
+  configId    String
+  config      AssessmentConfig @relation(fields: [configId], references: [id])
+  age         Int
+  /// [{ questionId, optionId, marks }] — copied at submission.
+  answers     Json
+  /// { [areaId]: score } computed with the config's question weights.
+  areaScores  Json
+  /// Overall assessment % used for Development Base mapping.
+  overallPercent Decimal?      @db.Decimal(6, 2)
+  isCurrent   Boolean          @default(true)
+  submittedAt DateTime         @default(now())
+
+  @@index([childId, isCurrent])
+  @@map("questionnaire_submissions")
+}
+
+model ActivityAttempt {
+  id             String            @id @default(cuid())
+  childId        String
+  child          Child             @relation(fields: [childId], references: [id], onDelete: Cascade)
+  activityId     String
+  activity       Activity          @relation(fields: [activityId], references: [id])
+  outcome        CompletionOutcome
+  /// Points awarded (halving + help rules: scoreCompletion in src/common/rules/scoring.ts).
+  points         Decimal           @db.Decimal(10, 2)
+  baseMarks      Int
+  repeat         Int
+  wasMandatory   Boolean           @default(false)
+  /// Active time in Independent mode, pauses excluded.
+  elapsedSeconds Int?
+  cycleWeek      Int
+  createdAt      DateTime          @default(now())
+
+  feedback ActivityFeedback?
+
+  @@index([childId, activityId])
+  @@map("activity_attempts")
+}
+
+model ActivityFeedback {
+  attemptId  String          @id
+  attempt    ActivityAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  difficulty String?
+  enjoyment  String?
+  note       String?
+
+  @@map("activity_feedback")
+}
+
+/// Earned level per area/category — monotonic: reassessment never demotes (guide §7).
+model ChildAreaLevel {
+  childId    String
+  child      Child   @relation(fields: [childId], references: [id], onDelete: Cascade)
+  areaId     String
+  categoryId String  @default("")
+  level      Int
+  updatedAt  DateTime @updatedAt
+
+  @@id([childId, areaId, categoryId])
+  @@map("child_area_levels")
+}
+
+/// Current difficulty per activity family (Activity Flow §19).
+model ChildFamilyStage {
+  childId   String
+  child     Child          @relation(fields: [childId], references: [id], onDelete: Cascade)
+  familyId  String
+  family    ActivityFamily @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  level     Int
+  updatedAt DateTime       @updatedAt
+
+  @@id([childId, familyId])
+  @@map("child_family_stages")
+}
+
+model WeeklyAssignment {
+  id         String           @id @default(cuid())
+  childId    String
+  child      Child            @relation(fields: [childId], references: [id], onDelete: Cascade)
+  activityId String
+  activity   Activity         @relation(fields: [activityId], references: [id])
+  cycleWeek  Int
+  status     AssignmentStatus @default(ASSIGNED)
+  mandatory  Boolean          @default(false)
+  reason     String?
+  assignedAt DateTime         @default(now())
+
+  @@unique([childId, activityId, cycleWeek])
+  @@map("weekly_assignments")
+}
+
+// ───────────────────────── Library: stories & rhymes ─────────────────────────
+
+/// Stories and rhymes keep separate category lists (guide §15).
+model LibraryCategory {
+  id    String      @id @default(cuid())
+  kind  LibraryKind
+  name  String
+
+  items      LibraryItem[]
+  engagement LibraryEngagement[]
+
+  @@unique([kind, name])
+  @@map("library_categories")
+}
+
+/// A story (many chapters) or a rhyme (exactly one chapter — enforced in the service).
+model LibraryItem {
+  id          String          @id @default(cuid())
+  kind        LibraryKind
+  title       String
+  categoryId  String
+  category    LibraryCategory @relation(fields: [categoryId], references: [id])
+  coverUrl    String?
+  description String?
+  /// Rhymes: uploaded audio or video (OPEN_QUESTIONS Q15).
+  mediaUrl    String?
+  /// Rhymes: "Lyrics / text", line breaks kept (API_REQUESTS #18). Null for stories.
+  lyrics      String?
+  minimumPlan PlanTier        @default(FREE)
+  status      ContentStatus   @default(DRAFT)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  chapters  LibraryChapter[]
+  favorites Favorite[]
+
+  @@map("library_items")
+}
+
+model LibraryChapter {
+  id       String      @id @default(cuid())
+  itemId   String
+  item     LibraryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  position Int
+  title    String
+  /// Background music continues across this chapter's pages.
+  musicUrl String?
+
+  pages   LibraryPage[]
+  history ReadingHistory[]
+
+  @@map("library_chapters")
+}
+
+model LibraryPage {
+  id          String         @id @default(cuid())
+  chapterId   String
+  chapter     LibraryChapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  position    Int
+  description String?
+
+  images LibraryPageImage[]
+
+  @@map("library_pages")
+}
+
+/// Stacked images on a page — no per-image description (guide §14).
+model LibraryPageImage {
+  id       String      @id @default(cuid())
+  pageId   String
+  page     LibraryPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  position Int
+  imageUrl String
+
+  @@map("library_page_images")
+}
+
+/// Parent sees the last 5 chapters read.
+model ReadingHistory {
+  id        String         @id @default(cuid())
+  childId   String
+  child     Child          @relation(fields: [childId], references: [id], onDelete: Cascade)
+  chapterId String
+  chapter   LibraryChapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  readAt    DateTime       @default(now())
+
+  @@index([childId, readAt])
+  @@map("reading_history")
+}
+
+model Favorite {
+  parentId  String
+  parent    Parent      @relation(fields: [parentId], references: [id], onDelete: Cascade)
+  itemId    String
+  item      LibraryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now())
+
+  @@id([parentId, itemId])
+  @@map("favorites")
+}
+
+/// Recorded reading/listening engagement, used for notification audience filters (guide §18).
+model LibraryEngagement {
+  id         String          @id @default(cuid())
+  parentId   String
+  parent     Parent          @relation(fields: [parentId], references: [id], onDelete: Cascade)
+  categoryId String
+  category   LibraryCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  createdAt  DateTime        @default(now())
+
+  @@index([categoryId, parentId])
+  @@map("library_engagement")
+}
+
+// ───────────────────────── Community, enquiries, notifications ─────────────────────────
+
+model CommunityPost {
+  id              String              @id @default(cuid())
+  authorType      CommunityAuthorType
+  parentId        String?
+  parent          Parent?             @relation(fields: [parentId], references: [id], onDelete: SetNull)
+  title           String?
+  /// Parent's submitted text; parents cannot edit after submission.
+  originalMessage String?
+  /// Text shown publicly (admin may rephrase).
+  message         String
+  imageUrl        String?
+  status          CommunityPostStatus @default(AWAITING_MODERATION)
+  rejectionReason String?
+  /// Pinned posts are not counted by, or hidden by, the regular visible limit.
+  pinned          Boolean             @default(false)
+  /// Null = no expiry. Timer starts at approval.
+  expiryHours     Int?
+  approvedAt      DateTime?
+  expiresAt       DateTime?
+  createdById     String?
+  createdAt       DateTime            @default(now())
+
+  @@index([status, expiresAt])
+  @@map("community_posts")
+}
+
+model Enquiry {
+  id        String        @id @default(cuid())
+  parentId  String
+  parent    Parent        @relation(fields: [parentId], references: [id], onDelete: Cascade)
+  message   String
+  status    EnquiryStatus @default(NEW)
+  createdAt DateTime      @default(now())
+
+  replies EnquiryReply[]
+
+  @@map("enquiries")
+}
+
+model EnquiryReply {
+  id        String                @id @default(cuid())
+  enquiryId String
+  enquiry   Enquiry               @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  body      String
+  /// At least one of EMAIL / IN_APP.
+  channels  NotificationChannel[]
+  status    ContentStatus         @default(DRAFT)
+  authorId  String
+  sentAt    DateTime?
+  createdAt DateTime              @default(now())
+
+  @@map("enquiry_replies")
+}
+
+model Notification {
+  id         String                @id @default(cuid())
+  parentId   String
+  parent     Parent                @relation(fields: [parentId], references: [id], onDelete: Cascade)
+  /// 'ENQUIRY_REPLY' | 'COMMUNITY_DECISION' | 'ANNOUNCEMENT' | 'ORDER_UPDATE' | 'MANDATORY_REMINDER'
+  type       String
+  title      String?
+  body       String
+  channels   NotificationChannel[]
+  /// Deep link for the parent app, e.g. community post.
+  route      String?
+  campaignId String?
+  campaign   Campaign?             @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  /// Extra details by type. MANDATORY_REMINDER: { childId, childName, areaIds, areas } (area names when sent).
+  data       Json?
+  readAt     DateTime?
+  createdAt  DateTime              @default(now())
+
+  @@index([parentId, createdAt])
+  @@map("notifications")
+}
+
+/// Group announcement. Filters combine with AND; one message per parent, not per child.
+model Campaign {
+  id             String                @id @default(cuid())
+  title          String
+  message        String
+  channels       NotificationChannel[]
+  /// { areaId?, age?, level?, plan?, storyCategoryId?, rhymeCategoryId?, regionIds?, countryCodes? }
+  filters        Json
+  recipientCount Int                   @default(0)
+  status         ContentStatus         @default(DRAFT)
+  createdById    String
+  sentAt         DateTime?
+  createdAt      DateTime              @default(now())
+
+  notifications Notification[]
+
+  @@map("campaigns")
+}
+
+// ───────────────────────── Plans & commerce ─────────────────────────
+
+model Plan {
+  tier        PlanTier @id
+  name        String
+  /// Memory items allowed per child. Null = unlimited.
+  memoryLimit Int?
+  active      Boolean  @default(true)
+
+  prices PlanPrice[]
+
+  @@map("plans")
+}
+
+/// Per-child monthly price. A missing row = not purchasable there; 0 = intentionally free.
+model PlanPrice {
+  planTier    PlanTier
+  plan        Plan     @relation(fields: [planTier], references: [tier], onDelete: Cascade)
+  countryCode String   @db.Char(2)
+  country     Country  @relation(fields: [countryCode], references: [code], onDelete: Cascade)
+  amount      Decimal  @db.Decimal(12, 2)
+
+  @@id([planTier, countryCode])
+  @@map("plan_prices")
+}
+
+model Product {
+  id                String        @id @default(cuid())
+  sku               String        @unique
+  title             String
+  category          String?
+  description       String?
+  details           String?
+  materials         String?
+  ageRecommendation String?
+  /// Shared across countries.
+  stock             Int           @default(0)
+  status            ContentStatus @default(DRAFT)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  images     ProductImage[]
+  prices     ProductPrice[]
+  orderItems OrderItem[]
+
+  @@map("products")
+}
+
+/// position 0 = cover.
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  position  Int
+
+  @@map("product_images")
+}
+
+model ProductPrice {
+  productId   String
+  product     Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  countryCode String  @db.Char(2)
+  country     Country @relation(fields: [countryCode], references: [code], onDelete: Cascade)
+  amount      Decimal @db.Decimal(12, 2)
+
+  @@id([productId, countryCode])
+  @@map("product_prices")
+}
+
+model Order {
+  id             String      @id @default(cuid())
+  number         Int         @unique @default(autoincrement())
+  parentId       String
+  parent         Parent      @relation(fields: [parentId], references: [id])
+  countryCode    String      @db.Char(2)
+  country        Country     @relation(fields: [countryCode], references: [code])
+  currency       String      @db.Char(3)
+  subtotal       Decimal     @db.Decimal(12, 2)
+  deliveryCharge Decimal     @db.Decimal(12, 2)
+  total          Decimal     @db.Decimal(12, 2)
+  status         OrderStatus @default(PAID)
+  /// { recipient, line1, line2, city, state, postcode, phone }
+  address        Json
+  trackingRef    String?
+  trackingUrl    String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  items OrderItem[]
+
+  @@map("orders")
+}
+
+/// Prices are snapshotted: changing the catalogue later never changes a paid order (guide §20).
+model OrderItem {
+  id            String  @id @default(cuid())
+  orderId       String
+  order         Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product @relation(fields: [productId], references: [id])
+  titleSnapshot String
+  unitPrice     Decimal @db.Decimal(12, 2)
+  quantity      Int
+
+  @@map("order_items")
+}
+
+// ───────────────────────── App content & checklist ─────────────────────────
+
+/// Working draft of static parent-app text.
+model AppContentEntry {
+  key       String            @id
+  surface   AppContentSurface
+  /// Parent-app route for PAGE_FAQ entries.
+  page      String?
+  title     String
+  body      String
+  updatedAt DateTime          @updatedAt
+
+  @@map("app_content_entries")
+}
+
+/// Immutable published snapshot. Parent sessions keep the version they started with.
+model AppContentVersion {
+  version       Int      @id @default(autoincrement())
+  entries       Json
+  publishedById String?
+  publishedAt   DateTime @default(now())
+
+  @@map("app_content_versions")
+}
+
+/// Week 1, Week 2, and "later weeks" (week = 3) checklists (guide §22). Ticks award no points.
+model ChecklistItem {
+  id          String         @id @default(cuid())
+  /// Each regional learning category has its own checklist (OPEN_QUESTIONS Q27, client 15 Oct).
+  /// An item stays in its category; removing an (unused) category removes its checklist.
+  regionId    String
+  region      LearningRegion @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  /// 1 = Week 1, 2 = Week 2, 3 = Later weeks (Q7).
+  week        Int
+  title       String
+  description String
+  position    Int
+  status      ContentStatus  @default(DRAFT)
+  createdAt   DateTime       @default(now())
+
+  ticks ChecklistTick[]
+
+  @@index([regionId, week, position])
+  @@map("checklist_items")
+}
+
+/// Per child — ticking for one child does not tick for a sibling.
+model ChecklistTick {
+  childId  String
+  child    Child         @relation(fields: [childId], references: [id], onDelete: Cascade)
+  itemId   String
+  item     ChecklistItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  tickedAt DateTime      @default(now())
+
+  @@id([childId, itemId])
+  @@map("checklist_ticks")
+}

@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Typography mirrors the prototype (style.css + folder-alignment.css). The root stays 16px so
+     Tailwind's rem spacing is correct; the 14px body size is inherited like the prototype's :root. */
+  body {
+    @apply bg-canvas font-sans text-ink;
+    font-size: 14px;
+    line-height: normal;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.6px;
+    margin: 7px 0 8px;
+  }
+  @media (max-width: 650px) {
+    h1 {
+      font-size: 26px;
+    }
+  }
+  h2 {
+    @apply text-heading;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.4px;
+  }
+  h3 {
+    /* no colour of its own: inherits, as in the prototype (black inside dialogs) */
+    font-size: 1.17em;
+    font-weight: 700;
+    /* prototype: margin-top 25px; bottom keeps the browser default of 1em */
+    margin: 25px 0 1em;
+  }
+  small {
+    font-size: 12px;
+  }
+  /* prototype assessment.css: #modal h3 { margin-top: 28px } */
+  dialog h3 {
+    margin-top: 28px;
+  }
+  :focus-visible {
+    @apply outline outline-2 outline-offset-2 outline-primary-ring;
+  }
+}
+
+@layer components {
+  .eyebrow {
+    @apply text-[10px] font-bold uppercase tracking-[2px] text-muted;
+  }
+  .input {
+    @apply rounded-card border border-field bg-white px-3 py-[11px] text-[#41394a] placeholder:text-muted/70 disabled:bg-canvas;
+  }
+}
