@@ -29,6 +29,7 @@ const filtersSchema = zod_1.z.object({
     age: zod_1.z.number().int().optional(),
     level: zod_1.z.number().int().optional(),
     plan: zod_1.z.enum(rules_1.PLAN_TIERS).optional(),
+    gender: zod_1.z.enum(rules_1.CHILD_GENDERS).optional(),
     storyCategoryId: zod_1.z.string().optional(),
     rhymeCategoryId: zod_1.z.string().optional(),
 });

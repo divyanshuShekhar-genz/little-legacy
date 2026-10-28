@@ -11,12 +11,14 @@ import type { CreateRegionDto, DeleteRegionDto, UpdateRegionDto } from './dto/re
  * own complete learning catalogue. Super Admin only for changes (decision 2026-10-06): moving a
  * country changes which catalogue every NEW child there gets. Existing children keep their region.
  *
- * - A country belongs to at most one region; removing it makes the default region apply.
- * - Exactly one default region, and it must be active.
+ * - A country belongs to at most one region. There is no default region (client answer to
+ *   OPEN_QUESTIONS Q8, CR2): a country without one has no learning content until an admin assigns it.
+ * - `collectDob` (client answer to Q24): when off, parents in this category enter the child's age in
+ *   years and months instead of a date of birth. Stored as ChildFieldSetting `DOB`; on by default.
  * - A new region starts empty (no areas, questions, activities) and inactive, with the settings
  *   skeleton the learning engine needs: ages 3–5, Bases 1–3, progression defaults, rules revision 1.
  * - Inactive regions are skipped for new children (resolveRegionForCountry; OPEN_QUESTIONS Q19).
- * - A region can be removed only if no child has ever been assigned to it, and it isn't the default.
+ * - A region can be removed only if no child has ever been assigned to it.
  */
 
 export const REGION_ENTITY = 'LearningRegion';
@@ -24,12 +26,17 @@ const SECTION = 'Regional learning categories';
 
 type RegionPayload =
   | { delete: true }
-  | { delete?: false; name: string; countryCodes: string[]; isDefault: boolean; active: boolean };
+  | { delete?: false; name: string; countryCodes: string[]; active: boolean; collectDob: boolean };
 type RegionFields = Exclude<RegionPayload, { delete: true }>;
 
+export const DOB_FIELD = 'DOB';
+
 const snapshot = async (tx: Tx, id: string) => {
-  const r = await tx.learningRegion.findUnique({ where: { id }, include: { countries: { select: { code: true }, orderBy: { code: 'asc' } } } });
-  return r && { id: r.id, name: r.name, isDefault: r.isDefault, active: r.active, countryCodes: r.countries.map((c) => c.code) };
+  const r = await tx.learningRegion.findUnique({
+    where: { id },
+    include: { countries: { select: { code: true }, orderBy: { code: 'asc' } }, childFieldSettings: { where: { field: DOB_FIELD } } },
+  });
+  return r && { id: r.id, name: r.name, active: r.active, collectDob: r.childFieldSettings[0]?.collected ?? true, countryCodes: r.countries.map((c) => c.code) };
 };
 
 /** Prototype activity-progression defaults (docs/prototype/activities-assessment.md). */
@@ -56,12 +63,6 @@ async function validate(db: Tx, id: string | null, p: RegionFields) {
   if (existing.some((c) => c.learningRegionId && c.learningRegionId !== id)) {
     throw new ConflictException('A country already belongs to another category. Remove it there first.');
   }
-
-  if (p.isDefault && !p.active) throw new BadRequestException('The default category must stay active.');
-  if (id && !p.isDefault) {
-    const current = await db.learningRegion.findUnique({ where: { id }, select: { isDefault: true } });
-    if (current?.isDefault) throw new BadRequestException('Make another category the default first.');
-  }
 }
 
 @Injectable()
@@ -86,12 +87,19 @@ export class RegionsService implements OnModuleInit {
         }
 
         await validate(tx, id, payload);
-        if (payload.isDefault) await tx.learningRegion.updateMany({ where: { isDefault: true, ...(id ? { id: { not: id } } : {}) }, data: { isDefault: false } });
 
-        const data = { name: payload.name, isDefault: payload.isDefault, active: payload.active };
+        const data = { name: payload.name, active: payload.active };
         const regionId = id ? (await tx.learningRegion.update({ where: { id }, data })).id : await createWithSkeleton(tx, data);
+        // Older drafts (before Q24) have no collectDob: keep collecting the date of birth.
+        const collectDob = payload.collectDob ?? true;
+        await tx.childFieldSetting.upsert({
+          where: { regionId_field: { regionId, field: DOB_FIELD } },
+          update: { collected: collectDob },
+          create: { regionId, field: DOB_FIELD, collected: collectDob },
+        });
 
-        // Countries taken out fall back to the default region (for new children only).
+        // Countries taken out have no category until an admin assigns one (no default, CR2);
+        // children already there keep theirs.
         await tx.country.updateMany({ where: { learningRegionId: regionId, code: { notIn: payload.countryCodes } }, data: { learningRegionId: null } });
         await tx.country.updateMany({ where: { code: { in: payload.countryCodes } }, data: { learningRegionId: regionId } });
         return regionId;
@@ -104,16 +112,17 @@ export class RegionsService implements OnModuleInit {
     const regions = await this.prisma.learningRegion.findMany({
       include: {
         countries: { select: { code: true, name: true }, orderBy: { code: 'asc' } },
+        childFieldSettings: { where: { field: DOB_FIELD } },
         _count: { select: { areas: { where: { removedAt: null } }, activities: { where: { withdrawnAt: null } }, children: true } },
       },
       orderBy: { name: 'asc' },
     });
     return {
-      regions: regions.map(({ _count, ...r }) => ({
+      regions: regions.map(({ _count, childFieldSettings, ...r }) => ({
         id: r.id,
         name: r.name,
-        isDefault: r.isDefault,
         active: r.active,
+        collectDob: childFieldSettings[0]?.collected ?? true,
         countries: r.countries,
         counts: _count,
       })),
@@ -127,7 +136,7 @@ export class RegionsService implements OnModuleInit {
   }
 
   async create(admin: SessionAdmin, dto: CreateRegionDto) {
-    const payload: RegionFields = { name: dto.name, countryCodes: this.codes(dto.countryCodes), isDefault: false, active: dto.active };
+    const payload: RegionFields = { name: dto.name, countryCodes: this.codes(dto.countryCodes), active: dto.active, collectDob: dto.collectDob };
     await validate(this.prisma, null, payload);
     return this.drafts.saveOrDraft<RegionPayload>({ admin, mode: dto.mode, section: SECTION, entityType: REGION_ENTITY, entityId: null, payload, label: payload.name });
   }
@@ -138,8 +147,8 @@ export class RegionsService implements OnModuleInit {
     const payload: RegionFields = {
       name: dto.name ?? current.name,
       countryCodes: dto.countryCodes ? this.codes(dto.countryCodes) : current.countryCodes,
-      isDefault: dto.isDefault || current.isDefault,
       active: dto.active ?? current.active,
+      collectDob: dto.collectDob ?? current.collectDob,
     };
     await validate(this.prisma, id, payload);
     return this.drafts.saveOrDraft<RegionPayload>({ admin, mode: dto.mode, section: SECTION, entityType: REGION_ENTITY, entityId: id, regionId: id, payload, label: payload.name });
@@ -155,14 +164,13 @@ export class RegionsService implements OnModuleInit {
 
 /** A child's region is fixed and their records point at its catalogue, so it can never be removed. */
 async function assertRemovable(db: Tx, id: string) {
-  const region = await db.learningRegion.findUnique({ where: { id }, select: { isDefault: true, _count: { select: { children: true } } } });
+  const region = await db.learningRegion.findUnique({ where: { id }, select: { _count: { select: { children: true } } } });
   if (!region) throw new NotFoundException('Category not found');
-  if (region.isDefault) throw new BadRequestException("The default category can't be removed.");
   if (region._count.children > 0) throw new BadRequestException("Children already use this category, so it can't be removed. Deactivate it instead.");
 }
 
 /** New region + the settings the learning engine needs. No areas, questions or activities. */
-async function createWithSkeleton(tx: Tx, data: { name: string; isDefault: boolean; active: boolean }) {
+async function createWithSkeleton(tx: Tx, data: { name: string; active: boolean }) {
   const region = await tx.learningRegion.create({ data });
   await tx.ageGroup.createMany({ data: SKELETON_AGES.map((age) => ({ regionId: region.id, age })) });
   await tx.developmentBase.createMany({ data: SKELETON_BASES.map((b) => ({ regionId: region.id, ...b })) });

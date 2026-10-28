@@ -15,6 +15,8 @@ import { seedDemoChecklist } from './demo-checklist';
 import { seedDemoAppContentVersion } from './app-content';
 
 const DEMO_PASSWORD = 'ChangeMe123!';
+/** The demo families' parent-app password (SEED_DEMO_PARENT_PASSWORD; same default as the staff demo). */
+const demoParentPassword = () => process.env.SEED_DEMO_PARENT_PASSWORD || DEMO_PASSWORD;
 
 export async function seedDemo(prisma: PrismaClient) {
   if (process.env.NODE_ENV === 'production') throw new Error('Demo data must not be seeded in production.');
@@ -31,18 +33,32 @@ export async function seedDemo(prisma: PrismaClient) {
 
   const region = await prisma.learningRegion.findUniqueOrThrow({ where: { name: REGION_NAMES.indiaSriLanka } });
   const families = [
-    { parent: 'Meera', child: 'Aria', dob: '2022-05-10' },
-    { parent: 'Kunal', child: 'Rishi', dob: '2023-02-02' },
-    { parent: 'Priya', child: 'Maya', dob: '2021-07-21' },
+    { parent: 'Meera', child: 'Aria', dob: '2022-05-10', parentDob: '1991-03-12', phone: '+919876500001' },
+    { parent: 'Kunal', child: 'Rishi', dob: '2023-02-02', parentDob: '1988-11-04', phone: '+919876500002' },
+    { parent: 'Priya', child: 'Maya', dob: '2021-07-21', parentDob: '1993-06-27', phone: '+919876500003' },
   ];
+  // Complete parent-app profiles, so the mobile app can sign in as them (docs/PARENT_API.md).
+  const parentPasswordHash = await bcrypt.hash(demoParentPassword(), 10);
+  const signIn = (f: (typeof families)[number]) => ({
+    passwordHash: parentPasswordHash,
+    dob: new Date(f.parentDob),
+    phone: f.phone,
+    termsAcceptedAt: new Date('2026-09-14T10:00:00Z'),
+  });
   for (const f of families) {
     const email = `${f.parent.toLowerCase()}@example.com`;
-    if (await prisma.parent.findUnique({ where: { email } })) continue;
+    const existing = await prisma.parent.findUnique({ where: { email } });
+    if (existing) {
+      // Families seeded before the parent app get their sign-in details once; nothing else changes.
+      if (!existing.passwordHash) await prisma.parent.update({ where: { id: existing.id }, data: signIn(f) });
+      continue;
+    }
     await prisma.parent.create({
       data: {
         name: f.parent,
         email,
         countryCode: 'IN',
+        ...signIn(f),
         createdAt: new Date('2026-09-14T10:00:00Z'),
         children: { create: { name: f.child, dob: new Date(f.dob), regionId: region.id } },
       },
@@ -60,6 +76,7 @@ export async function seedDemo(prisma: PrismaClient) {
   await seedDemoAppContentVersion(prisma);
 
   console.log(`✔ Demo data. Sub Admins: ${subAdmins.map((a) => a.email).join(', ')} / ${DEMO_PASSWORD}`);
+  console.log(`✔ Parent app: ${families.map((f) => `${f.parent.toLowerCase()}@example.com`).join(', ')} (SEED_DEMO_PARENT_PASSWORD)`);
 }
 
 /** The prototype's community content: one parent message awaiting moderation, two team posts. */

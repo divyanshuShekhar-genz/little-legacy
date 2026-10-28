@@ -31,26 +31,25 @@ describe('currency codes (§20)', () => {
   });
 });
 
-describe('region for a new child (§5, CP §1)', () => {
+describe('region for a new child (§5, CP §1; no default category, Q8 / CR2)', () => {
   const regions = [
-    { id: 'cat1', isDefault: false, active: true },
-    { id: 'cat2', isDefault: true, active: true },
-    { id: 'cat3', isDefault: false, active: false },
+    { id: 'cat1', active: true },
+    { id: 'cat3', active: false },
   ];
 
   it('uses the country\'s own region', () => {
     expect(resolveRegionForCountry('cat1', regions)?.id).toBe('cat1');
   });
 
-  it('falls back to the default when the country has no region', () => {
-    expect(resolveRegionForCountry(null, regions)?.id).toBe('cat2');
+  it('gives no region when the country has none: no fallback', () => {
+    expect(resolveRegionForCountry(null, regions)).toBeNull();
   });
 
-  it('falls back to the default when the country\'s region is inactive (Q19 interim)', () => {
-    expect(resolveRegionForCountry('cat3', regions)?.id).toBe('cat2');
+  it('gives no region when the country\'s region is inactive (Q19 interim)', () => {
+    expect(resolveRegionForCountry('cat3', regions)).toBeNull();
   });
 
-  it('returns null when there is no default region', () => {
-    expect(resolveRegionForCountry(null, [{ id: 'x', isDefault: false, active: true }])).toBeNull();
+  it('gives no region when the country\'s region no longer exists', () => {
+    expect(resolveRegionForCountry('gone', regions)).toBeNull();
   });
 });

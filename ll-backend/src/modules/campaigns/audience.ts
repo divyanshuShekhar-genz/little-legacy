@@ -29,6 +29,7 @@ export function normalizeFilters(dto: CampaignFiltersDto | undefined): AudienceF
   if (dto.age !== undefined) f.age = dto.age;
   if (dto.level !== undefined) f.level = dto.level;
   if (dto.plan) f.plan = dto.plan;
+  if (dto.gender) f.gender = dto.gender;
   if (dto.storyCategoryId) f.storyCategoryId = dto.storyCategoryId;
   if (dto.rhymeCategoryId) f.rhymeCategoryId = dto.rhymeCategoryId;
   return f;
@@ -72,7 +73,7 @@ const engagedWith = (categoryId: string): Prisma.ParentWhereInput => ({
 /**
  * The parents a campaign reaches (API_REQUESTS #23, decisions 1–2, 8), by name. Country and the
  * category filters are narrowed in the database; the child filters (region, content age, current
- * plan, level in the area) are checked per child by `parentMatches()`, with levels worked out only
+ * plan, gender, level in the area) are checked per child by `parentMatches()`, with levels worked out only
  * for children still in the running. Each parent appears once.
  */
 export async function findAudience(db: Db, f: AudienceFilters, now = new Date()): Promise<{ id: string; name: string }[]> {
@@ -80,7 +81,8 @@ export async function findAudience(db: Db, f: AudienceFilters, now = new Date())
   const childFilters = hasChildFilters(f);
   const regionIds = areaRegionId ? [areaRegionId] : f.regionIds;
 
-  const and: Prisma.ParentWhereInput[] = [];
+  // Deleted accounts (parent app) never get notifications.
+  const and: Prisma.ParentWhereInput[] = [{ deletedAt: null }];
   if (f.countryCodes) and.push({ countryCode: { in: f.countryCodes } });
   if (f.storyCategoryId) and.push(engagedWith(f.storyCategoryId));
   if (f.rhymeCategoryId) and.push(engagedWith(f.rhymeCategoryId));
@@ -101,6 +103,7 @@ export async function findAudience(db: Db, f: AudienceFilters, now = new Date())
             id: true,
             regionId: true,
             dob: true,
+            gender: true,
             // The current plan: the latest subscription running now (a trial is a Plus subscription); none = Free.
             subscriptions: { where: { startsAt: { lte: now }, OR: [{ endsAt: null }, { endsAt: { gt: now } }] }, orderBy: { startsAt: 'desc' }, take: 1, select: { plan: true } },
           },
@@ -121,6 +124,7 @@ export async function findAudience(db: Db, f: AudienceFilters, now = new Date())
         regionId: c.regionId,
         age: f.age !== undefined && c.dob ? contentAge(completedYears(c.dob, now), agesByRegion.get(c.regionId) ?? []) : null,
         plan: c.subscriptions[0]?.plan ?? 'FREE',
+        gender: c.gender,
         level: null,
       };
       return child;

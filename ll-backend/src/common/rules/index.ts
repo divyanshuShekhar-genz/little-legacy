@@ -15,3 +15,4 @@ export * from './formula';
 export * from './skills';
 export * from './week-engine';
 export * from './audience';
+export * from './parents';

@@ -77,7 +77,7 @@ export class CountriesService implements OnModuleInit {
         deliveryCharge: Number(c.deliveryCharge),
         deliveryEstimate: c.deliveryEstimate,
         enabled: c.enabled,
-        /** Assigned learning region; null = the default region applies. */
+        /** Assigned learning region; null = none yet: no learning content there (no default category, CR2). */
         learningRegion: c.learningRegion,
       })),
     };

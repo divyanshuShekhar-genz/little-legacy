@@ -6,6 +6,7 @@ const collapse = ({ value }: { value: unknown }) => (typeof value === 'string' ?
 
 const NAME = 'Enter a category name.';
 const CODES = 'Use two-letter country codes.';
+const DOB = 'Choose whether to collect the date of birth.';
 
 /** "Add regional category" modal: "Category name" + "Country codes separated by spaces". */
 export class CreateRegionDto {
@@ -27,9 +28,14 @@ export class CreateRegionDto {
   @IsOptional()
   @IsBoolean()
   active: boolean = false;
+
+  /** Q24: false = parents enter the child's age in years and months instead of a date of birth. */
+  @IsOptional()
+  @IsBoolean({ message: DOB })
+  collectDob: boolean = true;
 }
 
-/** "Edit countries", rename, make default, activate / deactivate. Omitted fields stay as they are. */
+/** "Edit countries", rename, activate / deactivate, date of birth on / off. Omitted fields stay as they are. */
 export class UpdateRegionDto {
   @IsIn(['publish', 'draft'])
   mode: 'publish' | 'draft';
@@ -45,14 +51,14 @@ export class UpdateRegionDto {
   @IsString({ each: true, message: CODES })
   countryCodes?: string[];
 
-  /** Only `true` does anything: the default moves here. Unset it by making another region the default. */
-  @IsOptional()
-  @IsBoolean()
-  isDefault?: boolean;
-
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  /** Q24: false = parents enter the child's age in years and months instead of a date of birth. */
+  @IsOptional()
+  @IsBoolean({ message: DOB })
+  collectDob?: boolean;
 }
 
 export class DeleteRegionDto {

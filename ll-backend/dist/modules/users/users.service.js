@@ -21,7 +21,7 @@ let UsersService = class UsersService {
         const contains = search ? { contains: search, mode: 'insensitive' } : undefined;
         const [parents, ageGroups] = await Promise.all([
             this.prisma.parent.findMany({
-                where: contains ? { OR: [{ name: contains }, { email: contains }, { children: { some: { name: contains } } }] } : undefined,
+                where: { deletedAt: null, ...(contains ? { OR: [{ name: contains }, { email: contains }, { children: { some: { name: contains } } }] } : {}) },
                 include: { children: { orderBy: { createdAt: 'asc' } } },
                 orderBy: { createdAt: 'desc' },
             }),
@@ -31,8 +31,11 @@ let UsersService = class UsersService {
         let rows = parents.flatMap((p) => {
             const base = { parentId: p.id, parentName: p.name, email: p.email, registeredAt: p.createdAt.toISOString() };
             if (p.children.length === 0)
-                return [{ ...base, childId: null, childName: null, age: null }];
-            return p.children.map((c) => ({ ...base, childId: c.id, childName: c.name, age: c.dob ? (0, rules_1.completedYears)(c.dob, now) : null }));
+                return [{ ...base, childId: null, childName: null, age: null, ageMonths: null, dobEstimated: null }];
+            return p.children.map((c) => {
+                const a = c.dob ? (0, rules_1.ageOn)(c.dob, now) : null;
+                return { ...base, childId: c.id, childName: c.name, age: a?.years ?? null, ageMonths: a?.months ?? null, dobEstimated: c.dobEstimated };
+            });
         });
         if (age !== undefined)
             rows = rows.filter((r) => r.age === age);

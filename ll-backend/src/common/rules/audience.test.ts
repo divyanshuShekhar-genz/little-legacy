@@ -3,7 +3,7 @@ import { parentMatches, type AudienceChild, type AudienceParent } from './audien
 
 const IN = 'region-in';
 const EU = 'region-eu';
-const child = (c: Partial<AudienceChild>): AudienceChild => ({ regionId: IN, age: 4, plan: 'FREE', level: null, ...c });
+const child = (c: Partial<AudienceChild>): AudienceChild => ({ regionId: IN, age: 4, plan: 'FREE', gender: null, level: null, ...c });
 const parent = (p: Partial<AudienceParent>): AudienceParent => ({ countryCode: 'IN', children: [child({})], categoryIds: new Set(), ...p });
 
 describe('notification audience (§17)', () => {
@@ -43,5 +43,15 @@ describe('notification audience (§17)', () => {
     const p = parent({ categoryIds: new Set(['nature', 'bedtime']) });
     expect(parentMatches(p, { storyCategoryId: 'nature', rhymeCategoryId: 'bedtime' })).toBe(true);
     expect(parentMatches(p, { storyCategoryId: 'nature', rhymeCategoryId: 'kindness' })).toBe(false);
+  });
+
+  it('gender is a child filter (CR7): it combines with the others on the same child; not given never matches', () => {
+    const p = parent({ children: [child({ age: 4, gender: 'GIRL' }), child({ age: 5, gender: 'BOY' })] });
+    expect(parentMatches(p, { gender: 'GIRL' })).toBe(true);
+    expect(parentMatches(p, { gender: 'GIRL', age: 4 })).toBe(true);
+    // A girl and a five-year-old, but no five-year-old girl.
+    expect(parentMatches(p, { gender: 'GIRL', age: 5 })).toBe(false);
+    expect(parentMatches(parent({ children: [child({ gender: null })] }), { gender: 'BOY' })).toBe(false);
+    expect(parentMatches(parent({ children: [] }), { gender: 'GIRL' })).toBe(false);
   });
 });

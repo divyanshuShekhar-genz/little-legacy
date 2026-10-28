@@ -35,6 +35,8 @@ import { AppContentModule } from './modules/app-content/app-content.module';
 import { CountryAccessModule } from './modules/country-access/country-access.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { ExportsModule } from './modules/exports/exports.module';
+import { EmailModule } from './common/email/email.module';
+import { ParentAppModule } from './parent-app/parent-app.module';
 
 @Module({
   imports: [
@@ -43,6 +45,7 @@ import { ExportsModule } from './modules/exports/exports.module';
     AuditModule,
     DraftsModule,
     SettingsModule,
+    EmailModule,
 
     // Feature modules (one per admin-panel area). Add new ones here.
     HealthModule,
@@ -77,6 +80,9 @@ import { ExportsModule } from './modules/exports/exports.module';
     CountryAccessModule,
     UploadsModule,
     ExportsModule,
+
+    // The parent mobile app's API (/api/app), kept apart from the admin modules.
+    ParentAppModule,
   ],
 })
 export class AppModule {}

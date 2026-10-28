@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { completedYears } from '../../common/rules';
+import { ageOn } from '../../common/rules';
 import { childAreaLevels } from '../../common/utils/child-levels';
 import { areaScoresSchema, assessmentRulesSchema, questionnaireAnswersSchema } from '../../common/utils/assessment';
 import type { ListChildrenQueryDto } from './dto/list-children.query.dto';
@@ -20,7 +20,12 @@ export interface ChildLearningRow {
   id: string;
   name: string;
   parentName: string;
+  /** Completed years; null when there's no date of birth. */
   age: number | null;
+  /** The months on top of `age` (0–11), for "4 y 8 m" (Q24); null with `age`. */
+  ageMonths: number | null;
+  /** True when the date of birth was worked out from an age the parent entered (Q24). */
+  dobEstimated: boolean;
   /** When the current questionnaire was submitted; null = "Questionnaire not recorded". */
   assessmentStartedAt: string | null;
   questionnaireMarks: number | null;
@@ -74,7 +79,9 @@ export class ChildrenService {
         id: c.id,
         name: c.name,
         parentName: c.parent.name,
-        age: c.dob ? completedYears(c.dob, now) : null,
+        age: c.dob ? ageOn(c.dob, now).years : null,
+        ageMonths: c.dob ? ageOn(c.dob, now).months : null,
+        dobEstimated: c.dobEstimated,
         assessmentStartedAt: submission?.submittedAt.toISOString() ?? null,
         questionnaireMarks: submission ? answers.reduce((s, a) => s + a.marks, 0) : null,
         activityMarks: hasRecords ? c.attempts.reduce((s, t) => s + Number(t.points), 0) : null,

@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RegionsService = exports.REGION_ENTITY = void 0;
+exports.RegionsService = exports.DOB_FIELD = exports.REGION_ENTITY = void 0;
 const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../../prisma/prisma.service");
 const drafts_service_1 = require("../drafts/drafts.service");
@@ -17,9 +17,13 @@ const rules_1 = require("../../common/rules");
 const assessment_1 = require("../../common/utils/assessment");
 exports.REGION_ENTITY = 'LearningRegion';
 const SECTION = 'Regional learning categories';
+exports.DOB_FIELD = 'DOB';
 const snapshot = async (tx, id) => {
-    const r = await tx.learningRegion.findUnique({ where: { id }, include: { countries: { select: { code: true }, orderBy: { code: 'asc' } } } });
-    return r && { id: r.id, name: r.name, isDefault: r.isDefault, active: r.active, countryCodes: r.countries.map((c) => c.code) };
+    const r = await tx.learningRegion.findUnique({
+        where: { id },
+        include: { countries: { select: { code: true }, orderBy: { code: 'asc' } }, childFieldSettings: { where: { field: exports.DOB_FIELD } } },
+    });
+    return r && { id: r.id, name: r.name, active: r.active, collectDob: r.childFieldSettings[0]?.collected ?? true, countryCodes: r.countries.map((c) => c.code) };
 };
 const SKELETON_AGES = [3, 4, 5];
 const SKELETON_BASES = [
@@ -39,13 +43,6 @@ async function validate(db, id, p) {
         throw new common_1.BadRequestException(`Add ${missing.join(', ')} as a country first.`);
     if (existing.some((c) => c.learningRegionId && c.learningRegionId !== id)) {
         throw new common_1.ConflictException('A country already belongs to another category. Remove it there first.');
-    }
-    if (p.isDefault && !p.active)
-        throw new common_1.BadRequestException('The default category must stay active.');
-    if (id && !p.isDefault) {
-        const current = await db.learningRegion.findUnique({ where: { id }, select: { isDefault: true } });
-        if (current?.isDefault)
-            throw new common_1.BadRequestException('Make another category the default first.');
     }
 }
 let RegionsService = class RegionsService {
@@ -67,10 +64,14 @@ let RegionsService = class RegionsService {
                     return id;
                 }
                 await validate(tx, id, payload);
-                if (payload.isDefault)
-                    await tx.learningRegion.updateMany({ where: { isDefault: true, ...(id ? { id: { not: id } } : {}) }, data: { isDefault: false } });
-                const data = { name: payload.name, isDefault: payload.isDefault, active: payload.active };
+                const data = { name: payload.name, active: payload.active };
                 const regionId = id ? (await tx.learningRegion.update({ where: { id }, data })).id : await createWithSkeleton(tx, data);
+                const collectDob = payload.collectDob ?? true;
+                await tx.childFieldSetting.upsert({
+                    where: { regionId_field: { regionId, field: exports.DOB_FIELD } },
+                    update: { collected: collectDob },
+                    create: { regionId, field: exports.DOB_FIELD, collected: collectDob },
+                });
                 await tx.country.updateMany({ where: { learningRegionId: regionId, code: { notIn: payload.countryCodes } }, data: { learningRegionId: null } });
                 await tx.country.updateMany({ where: { code: { in: payload.countryCodes } }, data: { learningRegionId: regionId } });
                 return regionId;
@@ -81,16 +82,17 @@ let RegionsService = class RegionsService {
         const regions = await this.prisma.learningRegion.findMany({
             include: {
                 countries: { select: { code: true, name: true }, orderBy: { code: 'asc' } },
+                childFieldSettings: { where: { field: exports.DOB_FIELD } },
                 _count: { select: { areas: { where: { removedAt: null } }, activities: { where: { withdrawnAt: null } }, children: true } },
             },
             orderBy: { name: 'asc' },
         });
         return {
-            regions: regions.map(({ _count, ...r }) => ({
+            regions: regions.map(({ _count, childFieldSettings, ...r }) => ({
                 id: r.id,
                 name: r.name,
-                isDefault: r.isDefault,
                 active: r.active,
+                collectDob: childFieldSettings[0]?.collected ?? true,
                 countries: r.countries,
                 counts: _count,
             })),
@@ -103,7 +105,7 @@ let RegionsService = class RegionsService {
         return codes;
     }
     async create(admin, dto) {
-        const payload = { name: dto.name, countryCodes: this.codes(dto.countryCodes), isDefault: false, active: dto.active };
+        const payload = { name: dto.name, countryCodes: this.codes(dto.countryCodes), active: dto.active, collectDob: dto.collectDob };
         await validate(this.prisma, null, payload);
         return this.drafts.saveOrDraft({ admin, mode: dto.mode, section: SECTION, entityType: exports.REGION_ENTITY, entityId: null, payload, label: payload.name });
     }
@@ -114,8 +116,8 @@ let RegionsService = class RegionsService {
         const payload = {
             name: dto.name ?? current.name,
             countryCodes: dto.countryCodes ? this.codes(dto.countryCodes) : current.countryCodes,
-            isDefault: dto.isDefault || current.isDefault,
             active: dto.active ?? current.active,
+            collectDob: dto.collectDob ?? current.collectDob,
         };
         await validate(this.prisma, id, payload);
         return this.drafts.saveOrDraft({ admin, mode: dto.mode, section: SECTION, entityType: exports.REGION_ENTITY, entityId: id, regionId: id, payload, label: payload.name });
@@ -135,11 +137,9 @@ exports.RegionsService = RegionsService = __decorate([
         drafts_service_1.DraftsService])
 ], RegionsService);
 async function assertRemovable(db, id) {
-    const region = await db.learningRegion.findUnique({ where: { id }, select: { isDefault: true, _count: { select: { children: true } } } });
+    const region = await db.learningRegion.findUnique({ where: { id }, select: { _count: { select: { children: true } } } });
     if (!region)
         throw new common_1.NotFoundException('Category not found');
-    if (region.isDefault)
-        throw new common_1.BadRequestException("The default category can't be removed.");
     if (region._count.children > 0)
         throw new common_1.BadRequestException("Children already use this category, so it can't be removed. Deactivate it instead.");
 }

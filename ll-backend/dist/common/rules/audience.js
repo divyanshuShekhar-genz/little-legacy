@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.hasChildFilters = void 0;
 exports.childMatches = childMatches;
 exports.parentMatches = parentMatches;
-const hasChildFilters = (f) => Boolean(f.regionIds?.length || f.areaId || f.age !== undefined || f.level !== undefined || f.plan);
+const hasChildFilters = (f) => Boolean(f.regionIds?.length || f.areaId || f.age !== undefined || f.level !== undefined || f.plan || f.gender);
 exports.hasChildFilters = hasChildFilters;
 function childMatches(c, f, areaRegionId) {
     if (f.regionIds?.length && !f.regionIds.includes(c.regionId))
@@ -13,6 +13,8 @@ function childMatches(c, f, areaRegionId) {
     if (f.age !== undefined && c.age !== f.age)
         return false;
     if (f.plan && c.plan !== f.plan)
+        return false;
+    if (f.gender && c.gender !== f.gender)
         return false;
     if (f.level !== undefined && c.level !== f.level)
         return false;

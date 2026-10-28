@@ -12,7 +12,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { NOTIFICATION_CHANNELS, PLAN_TIERS, type NotificationChannel, type PlanTier } from '../../../common/rules';
+import { CHILD_GENDERS, NOTIFICATION_CHANNELS, PLAN_TIERS, type ChildGender, type NotificationChannel, type PlanTier } from '../../../common/rules';
 import { trim } from '../../../common/utils/json';
 
 const FILTERS = 'Choose filters from the lists.';
@@ -30,6 +30,8 @@ export class CampaignFiltersDto {
   @IsOptional() @Transform(blankToUndefined) @IsInt({ message: FILTERS }) @Min(0, { message: FILTERS }) age?: number;
   @IsOptional() @Transform(blankToUndefined) @IsInt({ message: FILTERS }) @Min(1, { message: FILTERS }) level?: number;
   @IsOptional() @Transform(blankToUndefined) @IsIn(PLAN_TIERS, { message: FILTERS }) plan?: PlanTier;
+  /** CR7. */
+  @IsOptional() @Transform(blankToUndefined) @IsIn(CHILD_GENDERS, { message: FILTERS }) gender?: ChildGender;
   @IsOptional() @Transform(blankToUndefined) @IsString({ message: FILTERS }) storyCategoryId?: string;
   @IsOptional() @Transform(blankToUndefined) @IsString({ message: FILTERS }) rhymeCategoryId?: string;
 }

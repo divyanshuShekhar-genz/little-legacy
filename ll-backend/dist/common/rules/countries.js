@@ -26,8 +26,6 @@ function parseCountryCodes(input) {
 }
 function resolveRegionForCountry(countryRegionId, regions) {
     const own = countryRegionId ? regions.find((r) => r.id === countryRegionId) : undefined;
-    if (own?.active)
-        return own;
-    return regions.find((r) => r.isDefault) ?? null;
+    return own?.active ? own : null;
 }
 //# sourceMappingURL=countries.js.map

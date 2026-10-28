@@ -33,17 +33,17 @@ export function parseCountryCodes(input: string | string[]): { codes: string[]; 
 
 export interface RegionRef {
   id: string;
-  isDefault: boolean;
   active: boolean;
 }
 
 /**
- * The learning region a NEW child in this country gets (CP §1; OPEN_QUESTIONS Q19 interim rule).
- * The country's own region if it has one and it is active; otherwise the default region.
+ * The learning region a NEW child in this country gets (CP §1). There is no default category
+ * (client answer to OPEN_QUESTIONS Q8, CR2): the country's own region if it has one and it is
+ * active (Q19 interim rule), otherwise none — the parent app then says the feature isn't
+ * available in their country and no child can be created there until an admin assigns one.
  * A child's region is fixed at creation — never call this again for an existing child.
  */
 export function resolveRegionForCountry<R extends RegionRef>(countryRegionId: string | null, regions: R[]): R | null {
   const own = countryRegionId ? regions.find((r) => r.id === countryRegionId) : undefined;
-  if (own?.active) return own;
-  return regions.find((r) => r.isDefault) ?? null;
+  return own?.active ? own : null;
 }

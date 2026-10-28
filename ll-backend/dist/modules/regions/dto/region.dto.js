@@ -15,10 +15,12 @@ const class_validator_1 = require("class-validator");
 const collapse = ({ value }) => (typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : value);
 const NAME = 'Enter a category name.';
 const CODES = 'Use two-letter country codes.';
+const DOB = 'Choose whether to collect the date of birth.';
 class CreateRegionDto {
     constructor() {
         this.countryCodes = [];
         this.active = false;
+        this.collectDob = true;
     }
 }
 exports.CreateRegionDto = CreateRegionDto;
@@ -43,6 +45,11 @@ __decorate([
     (0, class_validator_1.IsBoolean)(),
     __metadata("design:type", Boolean)
 ], CreateRegionDto.prototype, "active", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)({ message: DOB }),
+    __metadata("design:type", Boolean)
+], CreateRegionDto.prototype, "collectDob", void 0);
 class UpdateRegionDto {
 }
 exports.UpdateRegionDto = UpdateRegionDto;
@@ -67,12 +74,12 @@ __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsBoolean)(),
     __metadata("design:type", Boolean)
-], UpdateRegionDto.prototype, "isDefault", void 0);
+], UpdateRegionDto.prototype, "active", void 0);
 __decorate([
     (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.IsBoolean)(),
+    (0, class_validator_1.IsBoolean)({ message: DOB }),
     __metadata("design:type", Boolean)
-], UpdateRegionDto.prototype, "active", void 0);
+], UpdateRegionDto.prototype, "collectDob", void 0);
 class DeleteRegionDto {
 }
 exports.DeleteRegionDto = DeleteRegionDto;

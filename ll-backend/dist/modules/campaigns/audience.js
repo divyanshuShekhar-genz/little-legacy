@@ -26,6 +26,8 @@ function normalizeFilters(dto) {
         f.level = dto.level;
     if (dto.plan)
         f.plan = dto.plan;
+    if (dto.gender)
+        f.gender = dto.gender;
     if (dto.storyCategoryId)
         f.storyCategoryId = dto.storyCategoryId;
     if (dto.rhymeCategoryId)
@@ -69,7 +71,7 @@ async function findAudience(db, f, now = new Date()) {
     const { areaRegionId } = await checkFilters(db, f);
     const childFilters = (0, rules_1.hasChildFilters)(f);
     const regionIds = areaRegionId ? [areaRegionId] : f.regionIds;
-    const and = [];
+    const and = [{ deletedAt: null }];
     if (f.countryCodes)
         and.push({ countryCode: { in: f.countryCodes } });
     if (f.storyCategoryId)
@@ -91,6 +93,7 @@ async function findAudience(db, f, now = new Date()) {
                         id: true,
                         regionId: true,
                         dob: true,
+                        gender: true,
                         subscriptions: { where: { startsAt: { lte: now }, OR: [{ endsAt: null }, { endsAt: { gt: now } }] }, orderBy: { startsAt: 'desc' }, take: 1, select: { plan: true } },
                     },
                 },
@@ -109,6 +112,7 @@ async function findAudience(db, f, now = new Date()) {
                 regionId: c.regionId,
                 age: f.age !== undefined && c.dob ? (0, rules_1.contentAge)((0, rules_1.completedYears)(c.dob, now), agesByRegion.get(c.regionId) ?? []) : null,
                 plan: c.subscriptions[0]?.plan ?? 'FREE',
+                gender: c.gender,
                 level: null,
             };
             return child;

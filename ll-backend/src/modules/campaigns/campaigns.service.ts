@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { z } from 'zod';
 import { PrismaService } from '../../prisma/prisma.service';
 import { DraftsService, type SaveResult, type Tx } from '../drafts/drafts.service';
-import { NOTIFICATION_CHANNELS, PLAN_TIERS, type AudienceFilters } from '../../common/rules';
+import { CHILD_GENDERS, NOTIFICATION_CHANNELS, PLAN_TIERS, type AudienceFilters } from '../../common/rules';
 import { isSuperAdmin, type SessionAdmin } from '../../common/types/session-admin';
 import { toJson } from '../../common/utils/json';
 import { findAudience, normalizeFilters } from './audience';
@@ -39,6 +39,7 @@ const filtersSchema = z.object({
   age: z.number().int().optional(),
   level: z.number().int().optional(),
   plan: z.enum(PLAN_TIERS).optional(),
+  gender: z.enum(CHILD_GENDERS).optional(),
   storyCategoryId: z.string().optional(),
   rhymeCategoryId: z.string().optional(),
 });

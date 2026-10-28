@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { completedYears } from '../../common/rules';
+import { ageOn } from '../../common/rules';
 import type { ListUsersQueryDto } from './dto/list-users.query.dto';
 
 export interface RegisteredUserRow {
@@ -9,8 +9,12 @@ export interface RegisteredUserRow {
   email: string;
   childId: string | null;
   childName: string | null;
-  /** Completed years; null when DOB is not collected. */
+  /** Completed years; null when there's no date of birth. */
   age: number | null;
+  /** The months on top of `age` (0–11), for "4 y 8 m" (Q24); null with `age`. */
+  ageMonths: number | null;
+  /** True when the date of birth was worked out from an age the parent entered (Q24); null without a child. */
+  dobEstimated: boolean | null;
   registeredAt: string;
 }
 
@@ -26,7 +30,8 @@ export class UsersService {
     const contains = search ? { contains: search, mode: 'insensitive' as const } : undefined;
     const [parents, ageGroups] = await Promise.all([
       this.prisma.parent.findMany({
-        where: contains ? { OR: [{ name: contains }, { email: contains }, { children: { some: { name: contains } } }] } : undefined,
+        // Deleted accounts (parent app) aren't users any more; their orders keep "Deleted account".
+        where: { deletedAt: null, ...(contains ? { OR: [{ name: contains }, { email: contains }, { children: { some: { name: contains } } }] } : {}) },
         include: { children: { orderBy: { createdAt: 'asc' } } },
         orderBy: { createdAt: 'desc' },
       }),
@@ -36,8 +41,11 @@ export class UsersService {
     const now = new Date();
     let rows: RegisteredUserRow[] = parents.flatMap((p): RegisteredUserRow[] => {
       const base = { parentId: p.id, parentName: p.name, email: p.email, registeredAt: p.createdAt.toISOString() };
-      if (p.children.length === 0) return [{ ...base, childId: null, childName: null, age: null }];
-      return p.children.map((c) => ({ ...base, childId: c.id, childName: c.name, age: c.dob ? completedYears(c.dob, now) : null }));
+      if (p.children.length === 0) return [{ ...base, childId: null, childName: null, age: null, ageMonths: null, dobEstimated: null }];
+      return p.children.map((c) => {
+        const a = c.dob ? ageOn(c.dob, now) : null;
+        return { ...base, childId: c.id, childName: c.name, age: a?.years ?? null, ageMonths: a?.months ?? null, dobEstimated: c.dobEstimated };
+      });
     });
     if (age !== undefined) rows = rows.filter((r) => r.age === age);
 

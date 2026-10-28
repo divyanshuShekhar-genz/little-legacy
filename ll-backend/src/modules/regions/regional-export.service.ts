@@ -14,7 +14,7 @@ import { listGroups } from '../activity-groups/groups.query';
  *    Stories, rhymes, plans and the parent checklist aren't regional learning, so they're not here.
  * 2. Admin-only numbers (question marks and difficulty, weights) are included: the file is for staff.
  * 3. Super Admin only, like the header exports.
- * 4. Every category, or one with `?regionId=`.
+ * 4. Every category (by name), or one with `?regionId=`.
  */
 @Injectable()
 export class RegionalExportService {
@@ -29,8 +29,11 @@ export class RegionalExportService {
     }
     const regions = await this.prisma.learningRegion.findMany({
       where: regionId ? { id: regionId } : {},
-      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
-      include: { countries: { select: { code: true, name: true }, orderBy: { name: 'asc' } } },
+      orderBy: { name: 'asc' },
+      include: {
+        countries: { select: { code: true, name: true }, orderBy: { name: 'asc' } },
+        childFieldSettings: { where: { field: 'DOB' } },
+      },
     });
 
     const catalogues: Record<string, Awaited<ReturnType<RegionalExportService['catalogue']>>> = {};
@@ -44,7 +47,7 @@ export class RegionalExportService {
       type: 'little-legacy-regional-learning',
       schemaVersion: 1,
       exportedAt: new Date().toISOString(),
-      regions: regions.map((r) => ({ id: r.id, name: r.name, isDefault: r.isDefault, active: r.active, countries: r.countries })),
+      regions: regions.map((r) => ({ id: r.id, name: r.name, active: r.active, collectDob: r.childFieldSettings[0]?.collected ?? true, countries: r.countries })),
       catalogues,
     };
   }

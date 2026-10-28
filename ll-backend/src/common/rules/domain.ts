@@ -38,6 +38,10 @@ export type PermissionSection = (typeof PERMISSION_SECTIONS)[number];
 export const PLAN_TIERS = ['FREE', 'PLUS', 'PREMIUM'] as const;
 export type PlanTier = (typeof PLAN_TIERS)[number];
 
+/** Prisma `ChildGender` (client answer to OPEN_QUESTIONS Q25, CR7). A child's gender is optional. */
+export const CHILD_GENDERS = ['GIRL', 'BOY'] as const;
+export type ChildGender = (typeof CHILD_GENDERS)[number];
+
 /** Rank for "minimum plan" gates: a plan grants its tier and everything below. */
 export const PLAN_RANK: Record<PlanTier, number> = { FREE: 0, PLUS: 1, PREMIUM: 2 };
 

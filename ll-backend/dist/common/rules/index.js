@@ -30,4 +30,5 @@ __exportStar(require("./formula"), exports);
 __exportStar(require("./skills"), exports);
 __exportStar(require("./week-engine"), exports);
 __exportStar(require("./audience"), exports);
+__exportStar(require("./parents"), exports);
 //# sourceMappingURL=index.js.map

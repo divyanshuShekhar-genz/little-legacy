@@ -44,6 +44,8 @@ const app_content_module_1 = require("./modules/app-content/app-content.module")
 const country_access_module_1 = require("./modules/country-access/country-access.module");
 const uploads_module_1 = require("./modules/uploads/uploads.module");
 const exports_module_1 = require("./modules/exports/exports.module");
+const email_module_1 = require("./common/email/email.module");
+const parent_app_module_1 = require("./parent-app/parent-app.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -54,6 +56,7 @@ exports.AppModule = AppModule = __decorate([
             audit_module_1.AuditModule,
             drafts_module_1.DraftsModule,
             settings_module_1.SettingsModule,
+            email_module_1.EmailModule,
             health_module_1.HealthModule,
             auth_module_1.AuthModule,
             admins_module_1.AdminsModule,
@@ -86,6 +89,7 @@ exports.AppModule = AppModule = __decorate([
             country_access_module_1.CountryAccessModule,
             uploads_module_1.UploadsModule,
             exports_module_1.ExportsModule,
+            parent_app_module_1.ParentAppModule,
         ],
     })
 ], AppModule);

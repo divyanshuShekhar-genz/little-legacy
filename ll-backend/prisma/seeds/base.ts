@@ -56,7 +56,8 @@ export async function seedBase(prisma: PrismaClient) {
     },
   });
 
-  // Learning regions ("regional learning categories"). Category 1 starts empty by design.
+  // Learning regions ("regional learning categories"). Category 1 starts empty by design. There is
+  // no default category (OPEN_QUESTIONS Q8, CR2): every country below is assigned to one.
   const usEurope = await prisma.learningRegion.upsert({
     where: { name: REGION_NAMES.usEurope },
     update: {},
@@ -65,7 +66,7 @@ export async function seedBase(prisma: PrismaClient) {
   const indiaSriLanka = await prisma.learningRegion.upsert({
     where: { name: REGION_NAMES.indiaSriLanka },
     update: {},
-    create: { name: REGION_NAMES.indiaSriLanka, isDefault: true },
+    create: { name: REGION_NAMES.indiaSriLanka },
   });
 
   // Countries (prices are per country and never converted)

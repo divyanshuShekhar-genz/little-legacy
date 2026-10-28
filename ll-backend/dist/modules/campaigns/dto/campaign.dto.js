@@ -62,6 +62,12 @@ __decorate([
 __decorate([
     (0, class_validator_1.IsOptional)(),
     (0, class_transformer_1.Transform)(blankToUndefined),
+    (0, class_validator_1.IsIn)(rules_1.CHILD_GENDERS, { message: FILTERS }),
+    __metadata("design:type", String)
+], CampaignFiltersDto.prototype, "gender", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_transformer_1.Transform)(blankToUndefined),
     (0, class_validator_1.IsString)({ message: FILTERS }),
     __metadata("design:type", String)
 ], CampaignFiltersDto.prototype, "storyCategoryId", void 0);
